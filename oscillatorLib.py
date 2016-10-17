@@ -1,0 +1,327 @@
+import numpy as np
+import pdb
+import matplotlib.pyplot as plt
+import numpy.random
+import matplotlib.animation as animation
+
+###########################################################
+###########################################################
+###########################################################
+
+# TODO
+# Write in action potential
+# Write in event extraction
+# Couple with experiment lib
+# Shift experiment to 2pi phase scale
+
+
+###########################################################
+###########################################################
+###########################################################
+
+
+class population(object):
+
+    def __init__(self, dt, maxTime, nRows, nCols):
+        self.dt = dt
+        self.nRows = nRows
+        self.nCols = nCols
+        self.genTime(maxTime, dt)
+
+    def genTime(self, maxTime, dt):
+        self.t = np.arange(0, maxTime, dt)
+
+    def computeEpsilon(self):
+        return 0
+
+    def computePositions(self):
+        return 0
+        
+
+
+###########################################################
+###########################################################
+###########################################################
+
+class oscillator(object):
+    # Generic attributes applicable to cells, substrates, etc...
+
+    def __init__(self, x, y, dt, t, staticRate=0.8, leakRate = 0.1, randomStd=0.1, peakEpsilon=1, epsilon_floor=0.5, APLength=0.25, contractionDelay=0.05, peakForce=1, c0 = 0, peakCouplingRate=0.2, sensitivityWinParam = {'sensitivityWinType' : 0}, title="cardiacOscillator"):
+
+        self.dt = dt
+        self.t = t
+        self.c = np.zeros_like(t)
+        self.c[0] = c0
+        self.epsilon = np.zeros_like(t)
+        self.f = np.zeros_like(t)
+        self.cellEvents = []  # Time of start of contraction
+        self.trig = []  #  Index of action potential (contraction lags by contractionDelay)
+        self.ix = []  # Index of start of contraction
+        # k_constant computed such that, all other factors aside, we accumulate staticRate of our accumulation
+        # variable every unit time
+        self.k_constant = staticRate*dt
+        # For random component:  We want the random step to be a zero mean normal distribution
+        # with a standard deviation after a unit time equivalent to randomStd
+        # Considering Gaussian random walks, where each time step has standard deviation
+        # k_random_std, after n timesteps, we have a normal distribution woith standard
+        # deviation sqrt(n)*k_random_std
+        self.k_random_std = randomStd * np.sqrt(dt)# * dt
+        # k_leak, the leak rate per timestep, is computed such that after n timesteps in a unit time
+        # we get a reduction in integrating variable by 1-leakRate:
+        self.k_leak = 1-(1-leakRate)**(dt)
+        # k_coup:  The coupling strength.  Scaled based on desired peak coupling
+        self.k_coup = dt * peakCouplingRate / (peakEpsilon - epsilon_floor)
+        self.epsilon_floor = epsilon_floor
+        self.c0 = c0
+        self.contractionDelay = contractionDelay
+        self.APLength = APLength
+        self.genSensitivityWindow(sensitivityWinParam)
+
+    #############################################################
+
+    def step(self, i, epsilon):
+        self.epsilon[i] = epsilon
+
+        if self.c[i-1] ==2:
+            self.stepAP(i)
+        else:
+            self.c[i] = self.stepDD(epsilon)(self.c[i-1])
+            if self.c[i] > 1:
+                self.triggerAP(i)
+
+    #############################################################
+
+    def triggerAP(self, i):
+        self.c[i] = 2
+        self.trig.append(i)
+        if self.t[-1] - self.t[i] > self.contractionDelay:
+            self.ix.append(self.trig[-1] + int(self.contractionDelay/self.dt))
+
+    #############################################################
+
+    def stepDD(self, epsilon):
+        return lambda c: (1 - self.k_leak) * c + self.k_constant + numpy.random.normal(0, self.k_random_std) + self.sensitivity(c) * np.max([epsilon-self.epsilon_floor, 0]) * self.k_coup
+    
+    #############################################################
+
+    def stepAP(self, i):
+            if self.t[i] - self.t[self.ix[-1]] < self.APLength + self.contractionDelay:
+                self.stepAP
+                self.c[i] = 2
+                self.f[i] = self.computeForce(self.t[i], self.t[self.ix[-1]])
+            else:
+                self.c[i] = 0
+    #############################################################
+
+    def computeForce(self, t, t0):
+        if t - t0 < self.contractionDelay:
+            f = 0
+        else:
+            f = self.forceFunc(t-t0)
+        return f
+
+    #############################################################
+
+    def forceFunc(self, t):
+        return np.sin((t-self.contractionDelay)/(self.APLength)*np.pi)
+    
+    #############################################################
+
+    def genSensitivityWindow(self, sensitivityWinParam):
+        # Set sensitivity windowing function:
+        sensitivityWinType = sensitivityWinParam['sensitivityWinType']
+
+        # 0 implies constant sensitivity of unity: 
+        if sensitivityWinType == 0:
+            self.sensitivity = lambda c: 1
+
+        # 1 implies a gaussian sensitivity
+        if sensitivityWinType == 1:
+            sensitivityMean = sensitivityWinParam['sensitivityMean']
+            sensitivityStd = sensitivityWinParam['sensitivityStd']
+            self.sensitivity = lambda c: np.exp(-(c-sensitivityMean)**2/(2*sensitivityStd**2))
+
+    #####################################################
+        
+    def genIndices(self, events):
+        ix = np.zeros(np.size(events))
+        for i in range(0, np.size(events)):
+            ix[i] = int(np.argmin(np.abs(events[i] - self.t)))
+
+        return ix.astype(int)
+
+    ######################################################
+    
+    def phaseGen(self):
+        self.ix = np.asarray(self.ix)
+        phase = np.zeros(self.t.shape)
+        ixDiff = np.diff(self.ix,n=1,axis=0)
+
+        for ii in range(0,self.ix.shape[0]-1):
+            #phase[ix[ii,0],0] = 0
+            for jj in range(0,int(ixDiff[ii])+1):
+                phase[int(self.ix[ii])+jj] = float(jj)/float(ixDiff[ii])
+        self.theta = np.pi*2*phase
+
+
+
+
+#######################################################
+#######################################################
+#######################################################
+
+# Orphaned functions:
+def relativePhase(theta, thetaRef):
+    return np.mod(theta - thetaRef, np.pi*2)
+
+def relativePhaseToSubstrate(self, subTheta, subIx):
+    if subTheta.size > self.cellTheta.size:
+        subTheta = subTheta[0:self.cellTheta.size]
+    elif subTheta.size < self.cellTheta.size:
+        self.cellTheta = self.cellTheta[0:subTheta.size]
+    dTheta = np.mod(self.cellTheta - subTheta, 1)
+    minIndex = int(np.max([np.min(self.cellIx), np.min(subIx)]))
+    maxIndex = int(np.min([np.max(self.cellIx), np.max(subIx)]))
+    dTheta2 = dTheta[minIndex:maxIndex]
+    t2 = self.t[minIndex:maxIndex]
+
+
+##########################################################
+##########################################################
+##########################################################
+
+# Model animations:
+
+
+def plotOscillatorPair(c0, c1, u0, u1, f0, f1, title, filename):
+
+
+    top = 0.9
+    bottom = 0.1
+    left = 0.07
+    right = 0.98
+    wspace = 0.4
+    hspace = 0.4
+    fig = plt.figure(figsize=[8,6])
+    fig.subplots_adjust(top = top, bottom = bottom, left = left, right = right, hspace = hspace, wspace = wspace)
+
+
+    ax0 = fig.add_subplot(221)
+    i0 = u0.ix[-3]
+    i1 = int(u0.ix[-2] + (u0.ix[-2] - u0.ix[-3])*0.5)
+    ax0.plot(u0.t[i0:i1], u0.c[i0:i1])
+    ax0.set_xlim([u0.t[i0], u0.t[i1]])
+    ax0.set_ylim([0,2.1])
+    ax0.set_xlabel('t [sec]', fontsize=12)
+    ax0.set_ylabel('c', fontsize=12)
+
+    
+    ax1 = fig.add_subplot(222)
+    c = np.arange(0,1,.001)
+    if type(c0.sensitivity(c))==int:
+        d = np.ones_like(c)
+    else:
+        d = c0.sensitivity(c)
+    ax1.plot(c, d)
+    ax1.set_xlabel('c', fontsize=12)
+    ax1.set_ylabel(r'$k_{cell}$', fontsize=16)
+    ax1.set_ylim([0,1.1])
+    
+    ax2 = fig.add_subplot(223)    
+    i0 = int(c0.t.size*f0)
+    i1 = int(c0.t.size*f1)
+    ax2.plot(c0.t[i0:i1], c0.c[i0:i1], c0.t[i0:i1], c1.c[i0:i1])
+    ax2.set_ylim([0,2.1])
+    ax2.set_xlim([c0.t[i0], c0.t[i1]])
+    ax2.set_xlabel('t [sec]', fontsize = 12)
+    ax2.set_ylabel('c', fontsize = 12)
+
+    ax3 = fig.add_subplot(224)
+    i0 = np.max([np.min(c0.ix), np.min(c1.ix)])
+    i1 = np.min([np.max(c0.ix), np.max(c1.ix)])
+    ax3.plot(c0.t[i0:i1], relativePhase(c0.theta, c1.theta)[i0:i1], 'b')
+    ax3.plot(u0.t[i0:i1], relativePhase(u0.theta, u1.theta)[i0:i1], 'b', linestyle=':')
+    ax3.set_ylim([0,np.pi*2])
+    ax3.set_xlim([c0.t[i0], c0.t[i1]])
+    ax3.set_xlabel('t [sec]', fontsize = 12)
+    ax3.set_ylabel(r'$d\theta$', fontsize = 16)
+
+    plt.suptitle(title, fontsize=18)
+
+    plt.savefig(filename+".eps", dpi=250, facecolor='w')
+    plt.show()
+
+
+
+
+
+############################################
+############################################
+
+def plotManyOscillators(cells, ucells, f0, f1, title, filename):
+
+
+    top = 0.9
+    bottom = 0.1
+    left = 0.07
+    right = 0.98
+    wspace = 0.4
+    hspace = 0.4
+    fig = plt.figure(figsize=[8,6])
+    fig.subplots_adjust(top = top, bottom = bottom, left = left, right = right, hspace = hspace, wspace = wspace)
+
+
+    ax0 = fig.add_subplot(221)
+    i0 = ucells[0].ix[-3]
+    i1 = int(ucells[0].ix[-2] + (ucells[0].ix[-2] - ucells[0].ix[-3])*0.5)
+    ax0.plot(ucells[0].t[i0:i1], ucells[0].c[i0:i1])
+    ax0.set_xlim([ucells[0].t[i0], ucells[0].t[i1]])
+    ax0.set_ylim([0,2.1])
+    ax0.set_xlabel('t [sec]', fontsize=12)
+    ax0.set_ylabel('c', fontsize=12)
+
+    
+    ax1 = fig.add_subplot(222)
+    c = np.arange(0,1,.001)
+    if type(cells[0].sensitivity(c))==int:
+        d = np.ones_like(c)
+    else:
+        d = cells[0].sensitivity(c)
+    ax1.plot(c, d)
+    ax1.set_xlabel('c', fontsize=12)
+    ax1.set_ylabel(r'$k_{cell}$', fontsize=16)
+    ax1.set_ylim([0,1.1])
+    
+    ax2 = fig.add_subplot(223)    
+    i0 = int(cells[0].t.size*f0)
+    i1 = int(cells[0].t.size*f1)
+    ax2.plot(cells[0].t[i0:i1], cells[0].c[i0:i1], cells[0].t[i0:i1], cells[0].c[i0:i1])
+    ax2.set_ylim([0,2.1])
+    ax2.set_xlim([cells[0].t[i0], cells[0].t[i1]])
+    ax2.set_xlabel('t [sec]', fontsize = 12)
+    ax2.set_ylabel('c', fontsize = 12)
+
+    ax3 = fig.add_subplot(224)
+    #i0 = np.max([np.min(c0.ix), np.min(c1.ix)])
+    #i1 = np.min([np.max(c0.ix), np.max(c1.ix)])
+    i0 = 0
+    i1 = cells[0].t.size
+    for i in range(0,len(cells)):
+        ax3.plot(cells[i].t[i0:i1], relativePhase(cells[0].theta - np.pi, cells[i].theta)[i0:i1] - np.pi, 'b')
+    ax3.set_ylim([-np.pi,np.pi])
+    ax3.set_xlim([cells[0].t[i0], cells[0].t[i1-1]])
+    ax3.set_xlabel('t [sec]', fontsize = 12)
+    ax3.set_ylabel(r'$d\theta$', fontsize = 16)
+
+    plt.suptitle(title, fontsize=18)
+
+    plt.savefig(filename+".eps", dpi=250, facecolor='w')
+    plt.show()
+    
+
+
+
+
+
+
+

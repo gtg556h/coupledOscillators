@@ -1,0 +1,12 @@
+import numpy as np
+import pdb
+import matplotlib.pyplot as plt
+import oscillatorLib
+
+
+
+
+maxTime = 10
+dt = 0.001
+t = np.arange(0, maxTime, dt)
+
